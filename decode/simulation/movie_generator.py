@@ -106,7 +106,9 @@ def mat2gray(mat):
 
 def simulate_movie(X, Y, pixel_number, boundary_type, saved, direct_show, file_name, movie_param, save_path, downscale_factor = 1, frame_duration = 30, dt = 5):
     """ 
-    Simulate a movie from input trajectory coordinates
+    Simulate a movie from input trajectory coordinates.
+
+    Input:
     X,Y = (N * (frame_duration//dt) x M) arrays
     M - number of trajectories  
     N - trajectory duration
@@ -117,6 +119,12 @@ def simulate_movie(X, Y, pixel_number, boundary_type, saved, direct_show, file_n
     saved = 1 if movies is saved
     direct_show = 1 if should be shown as bit is being made
     file_name = name of the movies to be saved
+
+    Output:
+    stack - torch tensor of size (N x pixel_number x pixel_number), 
+        holding information/brightness for the corresponding (frame, x position, y position)
+    X_f, Y_f - final ground truth
+    X_discrete, Y_discrete - discretized positions (up to the neares pixel size)    
     """
 
     #radius = pixel_number/2
@@ -233,6 +241,16 @@ def simulate_BM(N, M, sigma=1.0, frame_duration = 30, dt = 5, corr = 0):
 
 
 def simulate_FBM(N, M, H = 0.5, sigma=1.0, frame_duration = 30, dt = 5):
+<<<<<<< HEAD
+    """
+    Simulate 2d-fractional Brownian motion with Hurst parameter H. 
+    Increments having normal distribution with std = sigma.
+
+    N - number of frames (trajectories' length)
+    M - number of molecules (number of trajectories)
+    H - Hurst parameter (0<H<1; case H = 0.5 is the same as Brownian motion)
+    sigma - standard deviation of increments
+=======
     """
     Simulate 2d-fractional Brownian motion with Hurst parameter H. 
     Increments having normal distribution with std = sigma.
@@ -256,6 +274,82 @@ def simulate_FBM(N, M, H = 0.5, sigma=1.0, frame_duration = 30, dt = 5):
     X = sigma*np.cumsum(x, axis = 0)
     Y = sigma*np.cumsum(y, axis = 0)
 
+    return X, Y
+
+def simulate_LSG(N, M, alpha = 1.5, sigma = 1.0, frame_duration = 30, dt = 5):
+    """
+    Simulate 2d Levy process with sug-Gaussian increments with stability index alpha. 
+    
+    note: this is the case of uniform spectral measure.
+    
+    https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.levy_stable.html
+
+    Do not use with alpha = 2.
+    For more details on sub-Gaussian (or, in general, sub-stable) distributions check:
+    G. Samorodnitsky, M. Taqqu: Stable Non-Gaussian Random Processes, section 2.5.
+
+    N - number of frames (trajectories' length)
+    M - number of molecules (number of trajectories)
+    alpha - stability parameter (0<alpha<2)
+    sigma - standard deviation of the underlying Brownian motion
+>>>>>>> d5ea5229a419b7503ee446d321ff4df800283164
+    frame_duration - duration of the frames in the movies
+    dt - one step duration
+
+    Example: # 1 trajectory of length 10_000
+    sigma = 0.5
+    H = 0.7
+    x,y = simulate_FBM(10_000, 1, H, sigma, 1, 1)
+    """
+<<<<<<< HEAD
+
+    f = FBM(n = N * (frame_duration//dt), hurst = H, length = N * (frame_duration//dt), method = 'daviesharte')
+    x = np.array([f.fgn() for _ in range(M)]).T
+    y = np.array([f.fgn() for _ in range(M)]).T
+    X = sigma*np.cumsum(x, axis = 0)
+    Y = sigma*np.cumsum(y, axis = 0)
+=======
+    beta = 1.
+    gamma = np.cos(np.pi*alpha/4)**(2/alpha)
+    delta = 0
+    A = levy_stable.rvs(alpha/2, beta, loc = delta, scale = gamma, size = (N * (frame_duration//dt), M))
+    A = np.sqrt(A) 
+    X = A*np.random.normal(0, 1, size = (N * (frame_duration//dt), M))
+    Y = A*np.random.normal(0, 1, size = (N * (frame_duration//dt), M))
+    X = sigma*np.cumsum(X, axis = 0)
+    Y = sigma*np.cumsum(Y, axis = 0) 
+    return X, Y
+
+>>>>>>> d5ea5229a419b7503ee446d321ff4df800283164
+
+
+def simulate_LSM(N, M, alpha = 2.0, beta = 0.0, loc = 0.0, scale = 1.0, frame_duration = 30, dt = 5):
+    """
+    Simulate 2d Levy stable motion with increments having Levy stable distribution with parameters
+    alpha, beta, delta (shift/location), scale. Coordinates are independent. 
+    
+    note: can be improved by utilizing dependence between coordinates (spectral measure).
+    
+    https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.levy_stable.html
+
+    For alpha = 2 (normal distribution case) it coincides with simulate_BM.
+
+    N - number of frames (trajectories' length)
+    M - number of molecules (number of trajectories)
+    alpha - stability parameter (0<alpha<=2)
+    beta - skewness parameter (-1<= beta <= 1)
+    loc - location parameter (loc in R)
+    scale - scale parameter (scale > 0)
+    frame_duration - duration of the frames in the movies
+    dt - one step duration
+    """
+
+    # levy_stable.rvs(alpha, beta, loc=0, scale=1, size=1, random_state=None)
+    X = np.cumsum(levy_stable.rvs(alpha=alpha, beta=beta, loc=loc, scale = scale/np.sqrt(2), size = (N * (frame_duration//dt), M)), axis = 0) #
+    Y = np.cumsum(levy_stable.rvs(alpha=alpha, beta=beta, loc=loc, scale = scale/np.sqrt(2), size = (N * (frame_duration//dt), M)), axis = 0) 
+    # scale is divided by sqrt(2) so that for normal distribuion case we have the same scaling as in simulate_BM
+    # one could use simulate_LSM(N, M, alpha = 2, beta = 0, loc = 0, scale = sigma, frame_duration, dt) 
+    # instead simulate_BM(N, M, sigma, frame_duration, dt), but simulate_BM should be more efficient.
     return X, Y
 
 def simulate_LSG(N, M, alpha = 1.5, sigma = 1.0, frame_duration = 30, dt = 5):
