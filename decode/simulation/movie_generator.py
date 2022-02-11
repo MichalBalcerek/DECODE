@@ -6,9 +6,10 @@ import scipy.signal
 import torch
 import tifffile
 #from tifffile import imsave
+from scipy.stats import levy_stable
 
 import decode.generic.emitter
-
+from fbm import FBM
 # np.random.seed(1337)
 
 def matlab_style_gauss2D(shape=(3,3),sigma=0.5):
@@ -120,8 +121,8 @@ def simulate_movie(X, Y, pixel_number, boundary_type, saved, direct_show, file_n
 
     #radius = pixel_number/2
     t, M = np.shape(X)
-    d_index = frame_duration//dt
-    t = t//(frame_duration//dt) # since we will have t frames, whereas N * (frame_duration//dt) was number of subframes
+    d_index = frame_duration//dt # number of subframes in a frame
+    t = t//d_index # since we will have t frames, whereas N * (frame_duration//dt) was number of subframes
     
     stack = np.zeros(shape = (t, pixel_number//downscale_factor, pixel_number//downscale_factor), dtype = np.float32) # frame, pixel, pixel ## previously uint8 
     # print("shape(stack) = ", np.shape(stack))
@@ -136,12 +137,10 @@ def simulate_movie(X, Y, pixel_number, boundary_type, saved, direct_show, file_n
     PSF_intensity = movie_param.PSF_intensity; # Maximum of hte PSF
     dx = movie_param.dx; # pixel size
 
-    hsize=20; # size of 2d Gaussian filter
+    hsize=21; # size of 2d Gaussian filter, preferably odd
     filterG = matlab_style_gauss2D(shape = (hsize, hsize), sigma = sigma_dye);
     filterG = PSF_intensity*filterG/np.max(filterG);
 
-    # xcoord = [np.arange(start = 1, stop = pixel_number+dx, step = dx)] # not needed as wer use rint for the closest
-    # ycoord = [np.arange(start = 1, stop = pixel_number+dx, step = dx)]
     X_discrete = np.zeros(shape = (t, M))
     Y_discrete = np.zeros(shape = (t, M))
     cp_t = 0
@@ -169,7 +168,7 @@ def simulate_movie(X, Y, pixel_number, boundary_type, saved, direct_show, file_n
             
             matrix = matrix + matrix_inter
 
-        matrix = matrix/(frame_duration//dt) # normalization over number of subframes
+        matrix = matrix/(d_index) # normalization over number of subframes
         matrix = matrix + background * np.ones(shape = (pixel_number, pixel_number))
             
         ## add noise
@@ -181,12 +180,12 @@ def simulate_movie(X, Y, pixel_number, boundary_type, saved, direct_show, file_n
         if direct_show == 1 & T == t-1:
             plt.imshow(matrix, cmap='gray', vmin=0, vmax=255)
         
-
         # saving data
         X_discrete[T, :] = closestIndexX/downscale_factor
         Y_discrete[T, :] = closestIndexY/downscale_factor
         #if saved == 1:
-        stack[T, :, :] = (matrix[0::downscale_factor, 0::downscale_factor] - np.min(matrix))/(np.max(matrix) - np.min(matrix)) * 500;#.astype(int);
+        # stack[T, :, :] = (matrix[0::downscale_factor, 0::downscale_factor] - np.min(matrix))/(np.max(matrix) - np.min(matrix))*500;#.astype(int);
+        stack[T, :, :] = matrix[0::downscale_factor, 0::downscale_factor] # no normalization
     # stack = stack.astype(int)
     X_f = X[(d_index-1)::d_index, :]
     Y_f = Y[(d_index-1)::d_index, :]
@@ -199,16 +198,125 @@ def simulate_movie(X, Y, pixel_number, boundary_type, saved, direct_show, file_n
 
     return stack, X_f, Y_f, X_discrete, Y_discrete
 
-def simulate_BM(N, M, sigma=1.0, frame_duration = 30, dt = 5):
+def simulate_BM(N, M, sigma=1.0, frame_duration = 30, dt = 5, corr = 0):
     """
+    Simulate 2d-Brownian motion with increments having normal distribution with std = sigma.
+
     N - number of frames (trajectories' length)
     M - number of molecules (number of trajectories)
+    sigma - standard deviation of increments
+    frame_duration - duration of the frames in the movies
+    dt - one step duration
+    corr - correlation coefficient
+
+    Example: # 1 trajectory of length 10_000
+    sigma = 0.5
+    corr = 0.5
+    x,y = simulate_BM(10_000, 1, sigma, 1, 1, 0.5)
+    dx = np.diff(x, axis = 0)
+    dy = np.diff(y, axis = 0)
+    np.cov(dx[:,0],dy[:,0]) # close to matrix [[sigma^2,sigma^2*corr],[sigma^2*corr,sigma^2]]
+    """
+      
+    if corr != 0:
+        sigma_mat = [[1, corr], [corr, 1]]
+        xy = np.random.multivariate_normal([0,0], sigma_mat, size = (N * (frame_duration//dt), M))
+        x = xy[:,:,0]
+        y = xy[:,:,1]
+        X = sigma * np.cumsum(x, axis = 0)
+        Y = sigma * np.cumsum(y, axis = 0)
+    else:
+        X = sigma * np.cumsum(np.random.normal(0, 1, size = (N * (frame_duration//dt), M)), axis = 0) # location, scale, size
+        Y = sigma * np.cumsum(np.random.normal(0, 1, size = (N * (frame_duration//dt), M)), axis = 0)
+
+    return X, Y
+
+
+def simulate_FBM(N, M, H = 0.5, sigma=1.0, frame_duration = 30, dt = 5):
+    """
+    Simulate 2d-fractional Brownian motion with Hurst parameter H. 
+    Increments having normal distribution with std = sigma.
+
+    N - number of frames (trajectories' length)
+    M - number of molecules (number of trajectories)
+    H - Hurst parameter (0<H<1; case H = 0.5 is the same as Brownian motion)
+    sigma - standard deviation of increments
+    frame_duration - duration of the frames in the movies
+    dt - one step duration
+
+    Example: # 1 trajectory of length 10_000
+    sigma = 0.5
+    H = 0.7
+    x,y = simulate_FBM(10_000, 1, H, sigma, 1, 1)
+    """
+
+    f = FBM(n = N * (frame_duration//dt), hurst = H, length = N * (frame_duration//dt), method = 'daviesharte')
+    x = np.array([f.fgn() for _ in range(M)]).T
+    y = np.array([f.fgn() for _ in range(M)]).T
+    X = sigma*np.cumsum(x, axis = 0)
+    Y = sigma*np.cumsum(y, axis = 0)
+
+    return X, Y
+
+def simulate_LSG(N, M, alpha = 1.5, sigma = 1.0, frame_duration = 30, dt = 5):
+    """
+    Simulate 2d Levy process with sug-Gaussian increments with stability index alpha. 
+    
+    note: this is the case of uniform spectral measure.
+    
+    https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.levy_stable.html
+
+    Do not use with alpha = 2.
+    For more details on sub-Gaussian (or, in general, sub-stable) distributions check:
+    G. Samorodnitsky, M. Taqqu: Stable Non-Gaussian Random Processes, section 2.5.
+
+    N - number of frames (trajectories' length)
+    M - number of molecules (number of trajectories)
+    alpha - stability parameter (0<alpha<2)
+    sigma - standard deviation of the underlying Brownian motion
     frame_duration - duration of the frames in the movies
     dt - one step duration
     """
-    X = sigma * np.cumsum(np.random.normal(0, 1, size = (N * (frame_duration//dt), M)), axis = 0) # location, scale, size
-    Y = sigma * np.cumsum(np.random.normal(0, 1, size = (N * (frame_duration//dt), M)), axis = 0)
+    beta = 1.
+    gamma = np.cos(np.pi*alpha/4)**(2/alpha)
+    delta = 0
+    A = levy_stable.rvs(alpha/2, beta, loc = delta, scale = gamma, size = (N * (frame_duration//dt), M))
+    A = np.sqrt(A) 
+    X = A*np.random.normal(0, 1, size = (N * (frame_duration//dt), M))
+    Y = A*np.random.normal(0, 1, size = (N * (frame_duration//dt), M))
+    X = sigma*np.cumsum(X, axis = 0)
+    Y = sigma*np.cumsum(Y, axis = 0) 
+    return X, Y
 
+
+
+def simulate_LSM(N, M, alpha = 2.0, beta = 0.0, loc = 0.0, scale = 1.0, frame_duration = 30, dt = 5):
+    """
+    Simulate 2d Levy stable motion with increments having Levy stable distribution with parameters
+    alpha, beta, delta (shift/location), scale. Coordinates are independent. 
+    
+    note: can be improved by utilizing dependence between coordinates (spectral measure).
+    
+    https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.levy_stable.html
+
+    For alpha = 2 (normal distribution case) it coincides with simulate_BM.
+
+    N - number of frames (trajectories' length)
+    M - number of molecules (number of trajectories)
+    alpha - stability parameter (0<alpha<=2)
+    beta - skewness parameter (-1<= beta <= 1)
+    loc - location parameter (loc in R)
+    scale - scale parameter (scale > 0)
+    frame_duration - duration of the frames in the movies
+    dt - one step duration
+    """
+
+    # levy_stable.rvs(alpha, beta, loc=0, scale=1, size=1, random_state=None)
+    X = np.cumsum(levy_stable.rvs(alpha=alpha, beta=beta, loc=loc, scale = scale/np.sqrt(2), size = (N * (frame_duration//dt), M)), axis = 0) #
+    Y = np.cumsum(levy_stable.rvs(alpha=alpha, beta=beta, loc=loc, scale = scale/np.sqrt(2), size = (N * (frame_duration//dt), M)), axis = 0) 
+    # scale is divided by sqrt(2) so that for normal distribuion case we have the same scaling as in simulate_BM
+    # one could use simulate_LSM(N, M, alpha = 2, beta = 0, loc = 0, scale = sigma, frame_duration, dt) 
+    # instead simulate_BM(N, M, sigma, frame_duration, dt), but simulate_BM should be more efficient.
     return X, Y
 
 def simulate_trajectories(X, Y, pixel_number, boundary_type):
@@ -228,21 +336,8 @@ def simulate_trajectories(X, Y, pixel_number, boundary_type):
     incY = np.diff(np.vstack((Y[0,:], Y)), axis = 0)
     t, M = np.shape(X)
     
-
-    # stack = np.zeros(shape = (t, pixel_number//downscale_factor, pixel_number//downscale_factor), dtype = np.float32) # frame, pixel, pixel
-    # #print("shape(stack) = ", np.shape(stack)) # 1.10.2021
-    # matrix = np.zeros(shape = (pixel_number, pixel_number))
-    # matrix_inter = np.zeros(shape = (pixel_number, pixel_number))
-    #print("shape(matrix) = ", np.shape(matrix)) # 1.10.2021
-    
-    # dx = 1.0
-    # xcoord = [np.arange(start = -radius+1, stop = radius+dx, step = dx)]
-    # ycoord = [np.arange(start = -radius+1, stop = radius+dx, step = dx)]
-    
     X_f = np.zeros(shape = (t, M))
     Y_f = np.zeros(shape = (t, M))
-    # X_discreet = np.zeros(shape = (t, M))
-    # Y_discreet = np.zeros(shape = (t, M))
 
     for T in range(t):
         if T == 0: # initial time
@@ -261,7 +356,7 @@ def simulate_trajectories(X, Y, pixel_number, boundary_type):
             if boundary_type == "square":
                 [x, y] = Reflect_Boundary_square(radius, x, y, jumpx, jumpy)
             elif boundary_type == "circle":
-                [x, y] = Reflect_Boundary_circle(radius, x, y, jumpx, jumpy)
+                [x, y] = Reflect_Boundary_circle(radius, x, y, jumpx, jumpy) # haven't checked it properly
             
         X_f[T, :] = x
         Y_f[T, :] = y
@@ -276,15 +371,14 @@ def movie_to_emitter(X, Y, split = True):
     Converting numpy array to DECODE EmitterSet class 
     """
     frames, N = np.shape(X) # number of frames, number of emitters
-    # x_torch = torch.from_numpy(X) # MB not used
-    # y_torch = torch.from_numpy(Y)
     frame_indices = torch.repeat_interleave(torch.arange(0, frames), N)
 
     xyz = torch.empty(N*frames, 3)
 
     for j in range(frames):
         for k in range(N):
-            xyz[k+j*N] = torch.tensor([X[j, k], Y[j, k], -1])    # MB decode.EmitterSet() -> -1 because of the weird results during the training
+            xyz[k+j*N] = torch.tensor([X[j, k], Y[j, k], 0])    
+            # MB decode.EmitterSet() # z not important, as we disable learning at this coordinate
 
     phot_ = 3000*torch.ones(N*frames)# torch.rand(N*frames) # MB how to obtain photons in simulations for each emitter? # is it PSF intensity
 

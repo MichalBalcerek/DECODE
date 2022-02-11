@@ -11,7 +11,6 @@ def setup_random_simulation(param):
         2. Define background and noise
         3. Setup simulation and datasets
         """
-
     psf = decode.utils.calibration_io.SMAPSplineCoefficient(
         calib_file=param.InOut.calibration_file).init_spline(
         xextent=param.Simulation.psf_extent[0],
@@ -25,7 +24,7 @@ def setup_random_simulation(param):
     """Structure Prior"""
     prior_struct = decode.simulation.structure_prior.RandomStructure.parse(param)
 
-    if param.Simulation.mode in ('acquisition', 'apriori'):
+    if param.Simulation.mode in ('acquisition', 'apriori', 'static_simulation'):
         frame_range_train = (0, param.HyperParameter.pseudo_ds_size)
 
     elif param.Simulation.mode == 'samples':
